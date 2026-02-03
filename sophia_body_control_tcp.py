@@ -1,243 +1,578 @@
-#!/usr/bin/env python3
-"""
-TCP JSON -> HR ROS body actuators bridge (STRICT CLAMPING)
+"""SMPL model visualizer
 
-Client sends: {"index": <int>, "value": [x,y,z]}
-Server replies: {"code": 0, "result": {...}} or {"code": nonzero, "error": "..."}
+Visualizer for SMPL human body models. Requires a .npz model file.
+
+See here for download instructions:
+    https://github.com/vchoutas/smplx?tab=readme-ov-file#downloading-the-model
 """
 
-import json
-import socket
-import threading
+from __future__ import annotations
+
+import time
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Tuple, Any
+from pathlib import Path
 
-import rospy
-from hr_msgs.msg import TargetPosture
-from hr_msgs.srv import SetActuatorsControl, SetActuatorsControlRequest
+import numpy as np
+import trimesh
+import tyro
 
+import viser
+import viser.transforms as tf
 
-# ----------------------------
-# Safety configuration
-# ----------------------------
+import Sophia_control
+from scipy.spatial.transform import Rotation as R
 
-GLOBAL_SCALE = 0.35   # extra safety: shrink all motions
+####################################################################################################
+# ‼️  UI-RELATED LOGIC OVERVIEW                                                                    #
+# The visualizer has two layers of UI:                                                             #
+#   1. *Viewer widgets* shown in the browser (tabs, sliders, colour picker, check-boxes, etc.).     #
+#      They are created **inside the make_gui_elements(..) function**.                             #
+#   2. *Scene gizmos* (TransformControls) that appear as draggable handles on top of joints.        #
+#      They are also spawned in make_gui_elements(..) and synchronised through callbacks.           #
+#                                                                                                  #
+#  ────────────────────────────────────────────────────────────────────────────────────────────────  #
+#  Where to look:                                                                                  #
+#    • make_gui_elements(..)  ← builds everything UI-related.                                       #
+#    • main(..)                 ← calls make_gui_elements and drives updates every frame.           #
+####################################################################################################
 
-# Very conservative default limits (radians).
-# You SHOULD refine these based on robot documentation / calibration.
-DEFAULT_LIMITS: Dict[str, Tuple[float, float]] = {
-    # Left arm
-    "LeftShoulderPitch": (-0.25, 0.25),
-    "LeftShoulderRoll":  (-0.25, 0.25),
-    "LeftShoulderYaw":   (-0.25, 0.25),
-    "LeftElbowPitch":    (-0.40, 0.40),
-    "LeftElbowYaw":      (-0.30, 0.30),
+def to_axisangle(val: tuple[float, ...] ,index = 0) -> np.ndarray:
+    if isinstance(val, (int, float)):
+        if index in (25,26,27,28,29,30):
+            return np.array([0.0, 0.0, float(val)], dtype=np.float32)
+        if index in (31,32,33):
+            return np.array([float(val), 0.0, float(val)], dtype=np.float32)
+        if index in (34,35,36):
+            return np.array([float(val)*0.3, 0.0, float(val)], dtype=np.float32)
+        if index in (20,21):
+            return np.array([float(val), 0.0, 0.0], dtype=np.float32)
+        if index in (38,39):
+            return np.array([float(val), 0.2 * float(val),   -float(val)], dtype=np.float32)
+        if index in (40,41,42,43,44,45):
+            return np.array([0.0, 0.0, -float(val)], dtype=np.float32)
+        if index in (46,47,48):
+            return np.array([float(val), 0.0, -float(val)], dtype=np.float32)
+        if index in (49,50,51):
+            return np.array([float(val)*0.3, 0.0, -float(val)], dtype=np.float32)
+        return np.array([0.0, float(val), 0.0], dtype=np.float32)
+    
+    if len(val) == 2:
+      if index == 16:
+          x,z = val
+          y_linked = x        
+          return np.array([x, 0.2 * y_linked, z], dtype=np.float32)
 
-    # Right arm
-    "RightShoulderPitch": (-0.25, 0.25),
-    "RightShoulderRoll":  (-0.25, 0.25),
-    "RightShoulderYaw":   (-0.25, 0.25),
-    "RightElbowPitch":    (-0.40, 0.40),
-    "RightElbowYaw":      (-0.30, 0.30),
+      if index == 17:
+          x,z = val
+          y_linked = x        
+          return np.array([ x, -0.2 * y_linked, z], dtype=np.float32)
+      
+      if index == 18:
+          x,y=val
+          z_linked = -x
+          return np.array([0.1 *x, y, z_linked], dtype=np.float32)
+      
+      if index == 19:
+          x,y=val
+          z_linked = x
+          return np.array([x, y, z_linked], dtype=np.float32)
+      
+      if index == 37:
+          x,y = val
+          z_linked = y
+          return np.array([x, y, z_linked], dtype=np.float32)
+      
 
-    # Hands/fingers (conservative)
-    "LeftIndexFinger":  (-0.30, 0.05),
-    "LeftMiddleFinger": (-0.30, 0.05),
-    "LeftRingFinger":   (-0.30, 0.05),
-    "LeftPinkyFinger":  (-0.30, 0.05),
-    "LeftThumbFinger":  (-0.30, 0.30),
-    "LeftThumbRoll":    (-0.20, 0.20),
+    return np.asarray(val, dtype=np.float32)
 
-    "RightIndexFinger":  (-0.30, 0.05),
-    "RightMiddleFinger": (-0.30, 0.05),
-    "RightRingFinger":   (-0.30, 0.05),
-    "RightPinkyFinger":  (-0.30, 0.05),
-    "RightThumbFinger":  (-0.30, 0.30),
-    "RightThumbRoll":    (-0.20, 0.20),
-}
-
-# If a command targets an actuator not in LIMITS -> reject (strict!)
-LIMITS = DEFAULT_LIMITS
-
-
-def clamp(actuator: str, v: float) -> float:
-    lo, hi = LIMITS[actuator]
-    if v < lo:
-        return lo
-    if v > hi:
-        return hi
-    return v
-
-
-# ----------------------------
-# Mapping from SMPL "index" to robot actuators
-# This is based on your smpl_visualizer UI meanings.
-# ----------------------------
 
 @dataclass(frozen=True)
-class ActuatorCmd:
-    actuator: str
-    extractor: Callable[[List[float]], float]   # takes [x,y,z] -> scalar command
+class SmplOutputs:
+    vertices: np.ndarray
+    faces: np.ndarray
+    T_world_joint: np.ndarray  # (num_joints, 4, 4)
+    T_parent_joint: np.ndarray  # (num_joints, 4, 4)
 
 
-def _need_vec3(v: Any) -> List[float]:
-    if not isinstance(v, (list, tuple)) or len(v) != 3:
-        raise ValueError("value must be a list/tuple of 3 floats: [x,y,z]")
-    return [float(v[0]), float(v[1]), float(v[2])]
+class SmplHelper:
+    """Helper for models in the SMPL family, implemented in numpy."""
+
+    def __init__(self, model_path: Path) -> None:
+        assert model_path.suffix.lower() == ".npz", "Model should be an .npz file!"
+        body_dict = dict(**np.load(model_path, allow_pickle=True))
+
+        self.J_regressor = body_dict["J_regressor"]
+        self.weights = body_dict["weights"]
+        self.v_template = body_dict["v_template"]
+        self.posedirs = body_dict["posedirs"]
+        self.shapedirs = body_dict["shapedirs"]
+        self.faces = body_dict["f"]
+
+        self.num_joints: int = self.weights.shape[-1]
+        self.num_betas: int = self.shapedirs.shape[-1]
+        self.parent_idx: np.ndarray = body_dict["kintree_table"][0]
+
+    def get_outputs(self, betas: np.ndarray, joint_rotmats: np.ndarray) -> SmplOutputs:
+        """Run the SMPL forward pass and return posed mesh & FK transforms."""
+        # Shape blend-shapes
+        v_tpose = self.v_template + np.einsum("vxb,b->vx", self.shapedirs, betas)
+        j_tpose = np.einsum("jv,vx->jx", self.J_regressor, v_tpose)
+
+        # Build local joint transforms (SE(3))
+        T_parent_joint = np.zeros((self.num_joints, 4, 4)) + np.eye(4)
+        T_parent_joint[:, :3, :3] = joint_rotmats
+        T_parent_joint[0, :3, 3] = j_tpose[0]
+        T_parent_joint[1:, :3, 3] = j_tpose[1:] - j_tpose[self.parent_idx[1:]]
+
+        # Forward kinematics
+        T_world_joint = T_parent_joint.copy()
+        for i in range(1, self.num_joints):
+            T_world_joint[i] = T_world_joint[self.parent_idx[i]] @ T_parent_joint[i]
+
+        # Linear blend skinning (LBS)
+        pose_delta = (joint_rotmats[1:, ...] - np.eye(3)).flatten()
+        v_blend = v_tpose + np.einsum("byn,n->by", self.posedirs, pose_delta)
+        v_delta = np.ones((v_blend.shape[0], self.num_joints, 4))
+        v_delta[:, :, :3] = v_blend[:, None, :] - j_tpose[None, :, :]
+        v_posed = np.einsum(
+            "jxy,vj,vjy->vx", T_world_joint[:, :3, :], self.weights, v_delta
+        )
+        return SmplOutputs(v_posed, self.faces, T_world_joint, T_parent_joint)
 
 
-# IMPORTANT:
-# Your visualizer sends axis-angle (x,y,z). We'll interpret components as follows:
-# - For 16/17 (shoulder pitch & roll): use x as pitch, z as roll.
-# - For 18/19 (shoulder yaw & elbow pitch): use x as yaw, y as elbow pitch.
-# - For 20/21 (elbow yaw): your to_axisangle uses x-axis, so use x.
-# - Fingers: your to_axisangle uses z (often negative), so use z.
-#
-# If directions feel inverted, flip sign here (safest place to adjust).
+########################################
+#      APPLICATION ENTRY-POINT (main)  #
+########################################
 
-INDEX_MAP: Dict[int, List[ActuatorCmd]] = {
-    # Left shoulder pitch & roll
-    16: [
-        ActuatorCmd("LeftShoulderPitch", lambda v: _need_vec3(v)[0]),
-        ActuatorCmd("LeftShoulderRoll",  lambda v: _need_vec3(v)[2]),
-    ],
-    # Right shoulder pitch & roll
-    17: [
-        ActuatorCmd("RightShoulderPitch", lambda v: _need_vec3(v)[0]),
-        ActuatorCmd("RightShoulderRoll",  lambda v: _need_vec3(v)[2]),
-    ],
-    # Left shoulder yaw & left elbow pitch
-    18: [
-        ActuatorCmd("LeftShoulderYaw",  lambda v: _need_vec3(v)[0]),
-        ActuatorCmd("LeftElbowPitch",   lambda v: _need_vec3(v)[1]),
-    ],
-    # Right shoulder yaw & right elbow pitch
-    19: [
-        ActuatorCmd("RightShoulderYaw", lambda v: _need_vec3(v)[0]),
-        ActuatorCmd("RightElbowPitch",  lambda v: _need_vec3(v)[1]),
-    ],
-    # Left elbow yaw
-    20: [
-        ActuatorCmd("LeftElbowYaw", lambda v: _need_vec3(v)[0]),
-    ],
-    # Right elbow yaw (you used a slider, but we still receive vec3 after to_axisangle)
-    21: [
-        ActuatorCmd("RightElbowYaw", lambda v: _need_vec3(v)[0]),
-    ],
+def main(model_path: Path) -> None:
+    # ————————————————————————————————————————
+    # 1)  Spin-up TCP/WebSocket server (Viser)
+    # ————————————————————————————————————————
+    server = viser.ViserServer()
+    server.scene.set_up_direction("+y")
+    server.scene.add_grid("/grid", position=(0.0, -1.3, 0.0), plane="xz")
 
-    # Left hand fingers (your indices)
-    25: [ActuatorCmd("LeftIndexFinger",  lambda v: _need_vec3(v)[2])],
-    28: [ActuatorCmd("LeftMiddleFinger", lambda v: _need_vec3(v)[2])],
-    31: [ActuatorCmd("LeftPinkyFinger",  lambda v: _need_vec3(v)[2])],
-    34: [ActuatorCmd("LeftRingFinger",   lambda v: _need_vec3(v)[2])],
+    # 2)  Initialise SMPL helper & GUI
+    #     └─ make_gui_elements(..) **creates all widgets & gizmos**
+    model = SmplHelper(model_path)
 
-    # Left thumb roll & thumb finger
-    37: [
-        ActuatorCmd("LeftThumbRoll",   lambda v: _need_vec3(v)[0]),
-        ActuatorCmd("LeftThumbFinger", lambda v: _need_vec3(v)[2]),
-    ],
+    gui_elements = make_gui_elements(
+        server,
+        num_betas=model.num_betas,
+        num_joints=model.num_joints,
+        parent_idx=model.parent_idx,
+    )
 
-    # Right hand fingers
-    40: [ActuatorCmd("RightIndexFinger",  lambda v: _need_vec3(v)[2])],
-    43: [ActuatorCmd("RightMiddleFinger", lambda v: _need_vec3(v)[2])],
-    46: [ActuatorCmd("RightPinkyFinger",  lambda v: _need_vec3(v)[2])],
-    49: [ActuatorCmd("RightRingFinger",   lambda v: _need_vec3(v)[2])],
-}
+    # 3)  Add mesh to scene (updated each frame)
+    body_handle = server.scene.add_mesh_simple(
+        "/human",
+        model.v_template,
+        model.faces,
+        wireframe=gui_elements.gui_wireframe.value,
+        color=gui_elements.gui_rgb.value,
+    )
 
+    # 4)  Main render/update loop – recompute SMPL when GUI changed
+    red_sphere = trimesh.creation.icosphere(radius=0.001, subdivisions=1)
+    red_sphere.visual.vertex_colors = (255, 0, 0, 255)  # type: ignore
 
-# ----------------------------
-# Server implementation
-# ----------------------------
+    # print("render loop started")
 
-class BodyBridgeServer:
-    def __init__(self, host: str = "0.0.0.0", port: int = 5005):
-        rospy.loginfo("[BodyBridge] waiting for /hr/actuators/set_control ...")
-        rospy.wait_for_service("/hr/actuators/set_control")
+    while True:
+        time.sleep(0.02)  # crude throttling
+        if not gui_elements.changed:
+            continue
 
-        self.pose_pub = rospy.Publisher("/hr/actuators/pose", TargetPosture, queue_size=1)
-        self.set_control = rospy.ServiceProxy("/hr/actuators/set_control", SetActuatorsControl)
+        gui_elements.changed = False
 
-        # Put all actuators we may touch into MANUAL mode
-        self._set_manual_for_whitelist()
+        
 
-        # TCP socket
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind((host, port))
-        self.sock.listen(16)
-        rospy.loginfo(f"[BodyBridge] listening on {host}:{port}")
+        # (Re)-evaluate SMPL with current GUI values
+        smpl_outputs = model.get_outputs(
+            betas=np.array([x.value for x in gui_elements.gui_betas]),
+            joint_rotmats= tf.SO3.exp(np.array([to_axisangle(g.value, i) for i,g in enumerate(gui_elements.gui_joints)])).as_matrix(),
+        )
 
-    def _set_manual_for_whitelist(self):
-        whitelist = sorted(LIMITS.keys())
-        req = SetActuatorsControlRequest()
-        req.control = SetActuatorsControlRequest.CONTROL_MANUAL
-        req.actuators = whitelist
-        self.set_control(req)
-        rospy.loginfo(f"[BodyBridge] set MANUAL control for {len(whitelist)} actuators")
+        # print("model has output")
 
-    def serve_forever(self):
-        while not rospy.is_shutdown():
-            conn, addr = self.sock.accept()
-            threading.Thread(target=self._handle, args=(conn, addr), daemon=True).start()
+        # Reflect into scene
+        body_handle.vertices = smpl_outputs.vertices
+        body_handle.wireframe = gui_elements.gui_wireframe.value
+        body_handle.color = gui_elements.gui_rgb.value
 
-    def _handle(self, conn: socket.socket, addr):
-        try:
-            raw = conn.recv(4096)
-            if not raw:
-                return
-            req = json.loads(raw.decode("utf-8"))
-
-            if not isinstance(req, dict) or "index" not in req or "value" not in req:
-                self._send(conn, code=1, error="request must be dict with keys: index, value")
-                return
-
-            idx = int(req["index"])
-            value = req["value"]
-
-            if idx not in INDEX_MAP:
-                self._send(conn, code=2, error=f"index {idx} not allowed (no mapping)")
-                return
-
-            cmds = INDEX_MAP[idx]
-            names: List[str] = []
-            vals: List[float] = []
-
-            for c in cmds:
-                if c.actuator not in LIMITS:
-                    self._send(conn, code=3, error=f"no limits for actuator {c.actuator}")
-                    return
-
-                v = float(c.extractor(value)) * GLOBAL_SCALE
-                v = clamp(c.actuator, v)
-                names.append(c.actuator)
-                vals.append(v)
-
-            # Publish to robot
-            msg = TargetPosture()
-            msg.names = names
-            msg.values = vals
-            self.pose_pub.publish(msg)
-
-            self._send(conn, code=0, result={"index": idx, "sent": dict(zip(names, vals))})
-
-        except Exception as e:
-            self._send(conn, code=99, error=str(e))
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    def _send(self, conn: socket.socket, code: int, result=None, error: str = ""):
-        resp = {"code": code}
-        if code == 0:
-            resp["result"] = result
-        else:
-            resp["error"] = error
-        conn.sendall(json.dumps(resp).encode("utf-8"))
+        # Update gizmo positions so they stick to joints
+        for i, control in enumerate(gui_elements.transform_controls):
+            control.position = smpl_outputs.T_parent_joint[i, :3, 3]
 
 
+##############################################
+#      GUI FACTORY – builds all user widgets  #
+##############################################
+
+hidden_indices = {26,27,29,30,32,33,35,36,38,39,41,42,44,45,47,48,50,51}
+
+def make_gui_elements(
+    server: viser.ViserServer,
+    num_betas: int,
+    num_joints: int,
+    parent_idx: np.ndarray,
+) -> "GuiElements":
+    """Create every GUI widget and scene handle used by the app."""
+
+    # ──────────────────────────────────────────
+    # Tab layout container (left side of viewer)
+    # ──────────────────────────────────────────
+    tab_group = server.gui.add_tab_group()
+
+    # Internal helper toggling a global "dirty" flag so the main loop knows
+    # when to recompute the mesh after *any* widget changes.
+    def set_changed(_):
+        out.changed = True  # 'out' will be defined later after widgets exist.
+
+    # ==============================================================================================
+    # 1. VIEW TAB  — general render settings
+    # ==============================================================================================
+    with tab_group.add_tab("View", viser.Icon.VIEWFINDER):
+        gui_rgb = server.gui.add_rgb("Color", initial_value=(90, 200, 255))
+        gui_wireframe = server.gui.add_checkbox("Wireframe", initial_value=False)
+        gui_show_controls = server.gui.add_checkbox("Handles", initial_value=True)
+
+        gui_rgb.on_update(set_changed)
+        gui_wireframe.on_update(set_changed)
+
+        @gui_show_controls.on_update
+        def _(_):
+            # Show / hide scene gizmos (TransformControls)
+            for control in transform_controls:
+                control.visible = gui_show_controls.value
+
+    # ==============================================================================================
+    # 2. SHAPE TAB  — β-shape sliders (body thickness, height, …)
+    # ==============================================================================================
+    with tab_group.add_tab("Shape", viser.Icon.BOX):
+        gui_reset_shape = server.gui.add_button("Reset Shape")
+        gui_random_shape = server.gui.add_button("Random Shape")
+
+        @gui_reset_shape.on_click
+        def _(_):
+            for beta in gui_betas:
+                beta.value = 0.0
+
+        @gui_random_shape.on_click
+        def _(_):
+            for beta in gui_betas:
+                beta.value = np.random.normal(loc=0.0, scale=1.0)
+
+        gui_betas = []
+        for i in range(num_betas):
+            beta = server.gui.add_slider(
+                f"beta{i}", min=-5.0, max=5.0, step=0.01, initial_value=0.0
+            )
+            gui_betas.append(beta)
+            beta.on_update(set_changed)
+
+    # ==============================================================================================
+    # 3. JOINTS TAB  — per-joint axis-angle controls
+    # ==============================================================================================
+    with tab_group.add_tab("Joints", viser.Icon.ANGLE):
+      
+        gui_reset_joints = server.gui.add_button("Reset Joints")
+        gui_random_joints = server.gui.add_button("Random Joints")
+
+        @gui_reset_joints.on_click
+        def _(_):
+            for joint in gui_joints:
+                joint.value = (0.0, 0.0, 0.0)
+
+        @gui_random_joints.on_click
+        def _(_):
+            rng = np.random.default_rng()
+            for joint in gui_joints:
+                joint.value = tf.SO3.sample_uniform(rng).log()
+
+        gui_joints: list[viser.GuiInputHandle[tuple[float, float, float]]] = []
+        for i in range(num_joints):
+            if i ==16:
+                gui_joint = server.gui.add_vector2(
+                    label= f"Left Shoulder Pitch & Left Shoulder Roll",
+                     initial_value=(0.0,0.0),
+                     step=0.05,
+                )
+            elif i == 17:
+              gui_joint = server.gui.add_vector2(
+                    label= f"Right Shoulder Pitch & Right Shoulder Roll",
+                     initial_value=(0.0,0.0),
+                     step=0.05,
+                )
+            elif i == 18:
+                gui_joint = server.gui.add_vector2(
+                    label= f"Left Shoulder Yaw & Left Elbow Pitch",
+                     initial_value=(0.0,0.0),
+                     step=0.05,
+                )
+            elif i == 19:
+              gui_joint = server.gui.add_vector2(
+                    label= f"Right Shoulder Yaw & Right Elbow Pitch",
+                     initial_value=(0.0,0.0),
+                     step=0.05,
+                )
+            elif i == 20:
+                gui_joint = server.gui.add_vector3(
+                      label = f"Left Elbow Yaw",
+                      initial_value= (0.0,0.0,0.0),
+                      step= 0.05,
+                  )
+            elif i == 21:
+                gui_joint = server.gui.add_slider(
+                      label = f"Right Elbow Yaw",
+                      initial_value= 0.0,
+                      step= 0.05,
+                      min = -1.2,
+                      max = 1.2
+                  )
+                
+            elif i in (25,28,31,34,40,43,46,49):
+                if i == 25: 
+                  gui_joint = server.gui.add_slider(
+                      label = f"Left Index Finger",
+                      initial_value= 0.0,
+                      step= 0.05,
+                      min = -1.2,
+                      max = 0.1
+                  )
+                elif i == 28:
+                    gui_joint = server.gui.add_slider(
+                      label = f"Left Middle Finger",
+                      initial_value= 0.0,
+                      step= 0.05,
+                      min = -1.2,
+                      max = 0.1
+                  )
+                elif i == 31:
+                    gui_joint = server.gui.add_slider(
+                      label = f"Left Pinkie Finger",
+                      initial_value= 0.0,
+                      step= 0.05,
+                      min = -1.2,
+                      max = 0.1
+                  )
+                elif i == 34:
+                    gui_joint = server.gui.add_slider(
+                      label = f"Left Ring Finger",
+                      initial_value= 0.0,
+                      step= 0.05,
+                      min = -1.2,
+                      max = 0.1
+                  )
+                elif i == 40: 
+                  gui_joint = server.gui.add_slider(
+                      label = f"Right Index Finger",
+                      initial_value= 0.0,
+                      step= 0.05,
+                      min = -1.2,
+                      max = 0.1
+                  )
+                elif i == 43:
+                    gui_joint = server.gui.add_slider(
+                      label = f"Right Middle Finger",
+                      initial_value= 0.0,
+                      step= 0.05,
+                      min = -1.2,
+                      max = 0.1
+                  )
+                elif i == 46:
+                    gui_joint = server.gui.add_slider(
+                      label = f"Right Pinkie Finger",
+                      initial_value= 0.0,
+                      step= 0.05,
+                      min = -1.2,
+                      max = 0.1
+                  )
+                elif i == 49:
+                    gui_joint = server.gui.add_slider(
+                      label = f"Right Ring Finger",
+                      initial_value= 0.0,
+                      step= 0.05,
+                      min = -1.2,
+                      max = 0.1
+                  )
+                    
+            elif i == 37:
+                gui_joint = server.gui.add_vector2(
+                    label= f"Left Thumb Roll & Left Thumb Finger",
+                     initial_value=(0.8,0.0),
+                     step=0.05,
+                )
+            elif i in (26,27,29,30,32,33,35,36,38,39,41,42,44,45,47,48,50,51):
+                gui_joint = server.gui.add_slider(
+                    label = f"Joint {i}(1-DOF)",
+                    initial_value= 0.0,
+                    step= 0.05,
+                    min = 0,
+                    max = 4,
+                    visible = False
+                )
+            else:
+                # Each vector3 widget holds axis-angle (x,y,z) for one joint
+                gui_joint = server.gui.add_vector3(
+                    label=f"Joint {i}",
+                    initial_value=(0.0, 0.0, 0.0),
+                    step=0.05,
+                )
+
+            gui_joints.append(gui_joint)
+
+            
+
+            # <callback> When user drags a joint slider we update the gizmo rotation & mark dirty
+            def set_callback_in_closure(i: int) -> None:
+                @gui_joint.on_update
+                def _(_):
+                    if i == 25:
+                      gui_joints[26].value = gui_joints[25].value
+                      gui_joints[27].value = gui_joints[25].value
+                      axis = to_axisangle(gui_joints[i].value, i)
+                      transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                      out.changed = True
+                    elif i == 28:
+                        gui_joints[29].value = gui_joints[28].value
+                        gui_joints[30].value = gui_joints[28].value
+                        axis = to_axisangle(gui_joints[i].value, i)
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        out.changed = True
+                    elif i == 31:
+                        gui_joints[32].value = gui_joints[31].value
+                        gui_joints[33].value = gui_joints[31].value
+                        axis = to_axisangle(gui_joints[i].value, i)
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        out.changed = True
+                    elif i == 34:
+                        gui_joints[35].value = gui_joints[34].value
+                        gui_joints[36].value = gui_joints[34].value
+                        axis = to_axisangle(gui_joints[i].value, i)
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        out.changed = True
+                    elif i == 37:
+                        gui_joints[38].value = gui_joints[37].value[1]
+                        gui_joints[39].value = gui_joints[37].value[1]
+                        axis = to_axisangle(gui_joints[i].value, i)
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        out.changed = True
+                    elif i == 40:
+                      gui_joints[41].value = gui_joints[40].value
+                      gui_joints[42].value = gui_joints[40].value
+                      axis = to_axisangle(gui_joints[i].value, i)
+                      transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                      out.changed = True
+                    elif i == 43:
+                        gui_joints[44].value = gui_joints[43].value
+                        gui_joints[45].value = gui_joints[43].value
+                        axis = to_axisangle(gui_joints[i].value, i)
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        out.changed = True
+                    elif i == 46:
+                        gui_joints[47].value = gui_joints[46].value
+                        gui_joints[48].value = gui_joints[46].value
+                        axis = to_axisangle(gui_joints[i].value, i)
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        out.changed = True
+                    elif i == 49:
+                        gui_joints[50].value = gui_joints[49].value
+                        gui_joints[51].value = gui_joints[49].value
+                        axis = to_axisangle(gui_joints[i].value, i)
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        out.changed = True
+                        
+                        
+                    else:
+                      axis = to_axisangle(gui_joints[i].value,i) 
+                      transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                      out.changed = True
+
+                    value = tuple(to_axisangle(gui_joints[i].value,i))
+
+                    if isinstance(value, np.ndarray):
+                        value = value.tolist()
+                    else:
+                        value = tuple(float(x) for x in value)
+
+                    print(value)
+                    if i not in hidden_indices:
+                        Sophia_control.call_remote(index = i,value = value)
+                    
+
+            set_callback_in_closure(i)
+
+    # =====================================================================
+    # 4. TRANSFORM CONTROLS (Scene gizmos attached to joints)              
+    # =====================================================================
+    # These are the coloured draggable arrows in the 3-D viewport.
+    transform_controls: list[viser.TransformControlsHandle] = []
+    prefixed_joint_names = []  # e.g. "root/hip_left/knee_left/..."
+    for i in range(num_joints):
+        prefixed_joint_name = f"joint_{i}"
+        if i > 0:
+            prefixed_joint_name = (
+                prefixed_joint_names[parent_idx[i]] + "/" + prefixed_joint_name
+            )
+        prefixed_joint_names.append(prefixed_joint_name)
+
+        controls = server.scene.add_transform_controls(
+            f"/smpl/{prefixed_joint_name}",
+            depth_test=False,
+            scale=0.2 * (0.75 ** prefixed_joint_name.count("/")),
+            disable_axes=True,
+            disable_sliders=True,
+            visible=True,  # sync later
+        )
+        transform_controls.append(controls)
+
+        # <callback> Scene gizmo → UI synchronisation (inverse of earlier)
+        def set_callback_in_closure(i: int) -> None:
+            @controls.on_update
+            def _(_) -> None:
+                axisangle = tf.SO3(controls.wxyz).log()
+                if len(gui_joints[i].value) == 2:
+                    gui_joints[i].value = (axisangle[1], axisangle[2])
+                else:
+                    gui_joints[i].value = tuple(axisangle)
+
+        set_callback_in_closure(i)
+
+    # Bundle everything into a convenient struct that the main loop polls
+    out = GuiElements(
+        gui_rgb,
+        gui_wireframe,
+        gui_betas,
+        gui_joints,
+        transform_controls=transform_controls,
+        changed=True,  # Force first recompute
+    )
+    return out
+
+# ——————————————————————————————————————————————————————————————————————————
+# Data-holder returned by make_gui_elements(..)
+# ——————————————————————————————————————————————————————————————————————————
+@dataclass
+class GuiElements:
+    """Container for easiest passing of GUI handles & state."""
+
+    gui_rgb: viser.GuiInputHandle[tuple[int, int, int]]
+    gui_wireframe: viser.GuiInputHandle[bool]
+    gui_betas: list[viser.GuiInputHandle[float]]
+    gui_joints: list[viser.GuiInputHandle[tuple[float, float, float]]]
+    transform_controls: list[viser.TransformControlsHandle]
+    changed: bool  # set to True whenever mesh needs recompute
+
+# Dummy helper used somewhere else
+
+def getindexandvalue(i, value):
+    return i, value
+
+
+# ——————————————————————————————————————————————————————————————————————————
+#  CLI Entry – allow running with `python smpl_visualizer_annotated.py --model_path model.npz`
+# ——————————————————————————————————————————————————————————————————————————
 if __name__ == "__main__":
-    rospy.init_node("sophia_body_bridge_server", anonymous=True)
-    server = BodyBridgeServer(host="0.0.0.0", port=5005)
-    server.serve_forever()
+    tyro.cli(main, description=__doc__)
+
