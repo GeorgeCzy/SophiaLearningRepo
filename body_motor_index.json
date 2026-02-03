@@ -1,0 +1,6 @@
+16: ["LeftShoulderPitch", "LeftShoulderRoll"],
+  17: ["RightShoulderPitch", "RightShoulderRoll"],
+  18: ["LeftShoulderYaw", "LeftElbowPitch"],
+  19: ["RightShoulderYaw", "RightElbowPitch"],
+  20: ["LeftElbowYaw"],
+  21: ["RightElbowYaw"],
