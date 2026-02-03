@@ -141,7 +141,7 @@ class SmplHelper:
 
 
 ########################################
-#  ��  APPLICATION ENTRY-POINT (main)  #
+#      APPLICATION ENTRY-POINT (main)  #
 ########################################
 
 def main(model_path: Path) -> None:
@@ -155,6 +155,7 @@ def main(model_path: Path) -> None:
     # 2)  Initialise SMPL helper & GUI
     #     └─ make_gui_elements(..) **creates all widgets & gizmos**
     model = SmplHelper(model_path)
+
     gui_elements = make_gui_elements(
         server,
         num_betas=model.num_betas,
@@ -175,6 +176,8 @@ def main(model_path: Path) -> None:
     red_sphere = trimesh.creation.icosphere(radius=0.001, subdivisions=1)
     red_sphere.visual.vertex_colors = (255, 0, 0, 255)  # type: ignore
 
+    # print("render loop started")
+
     while True:
         time.sleep(0.02)  # crude throttling
         if not gui_elements.changed:
@@ -190,6 +193,8 @@ def main(model_path: Path) -> None:
             joint_rotmats= tf.SO3.exp(np.array([to_axisangle(g.value, i) for i,g in enumerate(gui_elements.gui_joints)])).as_matrix(),
         )
 
+        # print("model has output")
+
         # Reflect into scene
         body_handle.vertices = smpl_outputs.vertices
         body_handle.wireframe = gui_elements.gui_wireframe.value
@@ -201,8 +206,10 @@ def main(model_path: Path) -> None:
 
 
 ##############################################
-#  ��  GUI FACTORY – builds all user widgets  #
+#      GUI FACTORY – builds all user widgets  #
 ##############################################
+
+hidden_indices = {26,27,29,30,32,33,35,36,38,39,41,42,44,45,47,48,50,51}
 
 def make_gui_elements(
     server: viser.ViserServer,
@@ -490,7 +497,8 @@ def make_gui_elements(
                         value = tuple(float(x) for x in value)
 
                     print(value)
-                    Sophia_control.call_remote(index = i,value = value)
+                    if i not in hidden_indices:
+                        Sophia_control.call_remote(index = i,value = value)
                     
 
             set_callback_in_closure(i)
