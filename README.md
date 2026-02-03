@@ -11,3 +11,4 @@ now run demo_llf_control.py, Sophia's face should be corresponde with your face 
 Already have smpl_visualizer on local computer, added tcp code for running on Sophia's computer.
 Run the tcp bridge code first and check connectivity: ss -lntp | grep 5005.
 Then run visualizer.
+To end the session, quit tcp bridge code and run "lsof -i :5005" to find the PID of the process, then do "kill -9 PID" to kill the port.
