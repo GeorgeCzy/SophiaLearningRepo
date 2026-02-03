@@ -6,3 +6,8 @@ pose parameters: 24*3, 24 body joints, 3-D axis-angle representation(a 3D vector
 # Sophia facial control
 app Arkit live link target: 10.0.0.10:1111
 now run demo_llf_control.py, Sophia's face should be corresponde with your face on the app.
+
+# Sophia body control
+Already have smpl_visualizer on local computer, added tcp code for running on Sophia's computer.
+Run the tcp bridge code first and check connectivity: ss -lntp | grep 5005.
+Then run visualizer.
