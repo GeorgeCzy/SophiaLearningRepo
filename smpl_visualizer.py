@@ -154,6 +154,25 @@ class SmplHelper:
 #      APPLICATION ENTRY-POINT (main)  #
 ########################################
 
+
+
+def deg(x):
+    return x * math.pi / 180.0
+
+VISUAL_OFFSET = {
+    16: to_axisangle((-0.05, -1.25), 16), # left shoulder roll
+    18: to_axisangle((0.1, -0.75), 18), # left elbow pitch
+    17: to_axisangle((-0.05, 1.25), 17), # right shoulder roll
+    19: to_axisangle((0.1, 0.75), 19), # right elbow pitch
+    20: to_axisangle((-0.5), 20), # left elbow yaw
+    21: to_axisangle((-0.5), 21), # right elbow yaw
+    # 16: to_axisangle((deg(-90), 0.0), 16), # left shoulder roll
+    # 17: to_axisangle((deg(90), 0.0), 17), # right shoulder roll
+    # 18: to_axisangle((0.0, deg(45)), 18), # left elbow pitch
+    # 19: to_axisangle((0.0, deg(45)), 19), # right elbow pitch
+
+}
+
 def main(model_path: Path) -> None:
     # ————————————————————————————————————————
     # 1)  Spin-up TCP/WebSocket server (Viser)
@@ -188,13 +207,7 @@ def main(model_path: Path) -> None:
 
     # print("render loop started")
 
-    VISUAL_OFFSET = {
-        # 16: to_axisangle((0.0, -1.3), 16), # left shoulder roll
-        # 18: to_axisangle((0.5, -0.75), 18), # left elbow pitch
-        # 17: to_axisangle((0.0, 1.3), 17), # right shoulder roll
-        # 19: to_axisangle((-0.5, 0.75), 19), # right elbow pitch
 
-    }
 
     while True:
         time.sleep(0.02)  # crude throttling
@@ -214,11 +227,29 @@ def main(model_path: Path) -> None:
         #     a = a + VISUAL_OFFSET.get(i, np.array([0.0, 0.0, 0.0]))
         #     axes.append(a)
 
+        axes = []
+        for i, g in enumerate(gui_elements.gui_joints):
+            a = to_axisangle(g.value, i)
+            R_gui = tf.SO3.exp(a)
+            off = VISUAL_OFFSET.get(i, None)
+            if off is None:
+                R_vis = R_gui
+            else:
+                R_off = tf.SO3.exp(off)
+                R_vis = R_off @ R_gui
+            axes.append(R_vis.log())
+
+
+        # smpl_outputs = model.get_outputs(
+        #     betas=np.array([x.value for x in gui_elements.gui_betas]),
+        #     joint_rotmats= tf.SO3.exp(np.array([to_axisangle(g.value, i) for i,g in enumerate(gui_elements.gui_joints)])).as_matrix(),
+        # )
 
         smpl_outputs = model.get_outputs(
             betas=np.array([x.value for x in gui_elements.gui_betas]),
-            joint_rotmats= tf.SO3.exp(np.array([to_axisangle(g.value, i) for i,g in enumerate(gui_elements.gui_joints)])).as_matrix(),
+            joint_rotmats= tf.SO3.exp(np.array(axes)).as_matrix(),
         )
+
         # modified version
         # smpl_outputs = model.get_outputs(
         #     betas=np.array([x.value for x in gui_elements.gui_betas]),
@@ -310,8 +341,6 @@ def make_gui_elements(
     # 3. JOINTS TAB  — per-joint axis-angle controls
     # ==============================================================================================
 
-    def deg(x):
-        return x * math.pi / 180.0
 
     with tab_group.add_tab("Joints", viser.Icon.ANGLE):
       
@@ -356,10 +385,12 @@ def make_gui_elements(
                      step=0.05,
                 )
             elif i == 20:
-                gui_joint = server.gui.add_vector3(
+                gui_joint = server.gui.add_slider(
                       label = f"Left Elbow Yaw",
-                      initial_value= (0.0,0.0,0.0),
+                      initial_value= 0.0,
                       step= 0.05,
+                      min = deg(-123),
+                      max = deg(123)
                   )
             elif i == 21:
                 gui_joint = server.gui.add_slider(
@@ -538,67 +569,111 @@ def make_gui_elements(
                       gui_joints[26].value = gui_joints[25].value
                       gui_joints[27].value = gui_joints[25].value
                       axis = to_axisangle(gui_joints[i].value, i)
-                      transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                      # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                      R_gui = tf.SO3.exp(axis)
+                      off = VISUAL_OFFSET.get(i, None)
+                      R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
+                      transform_controls[i].wxyz = R_vis.wxyz
                       out.changed = True
                     elif i == 28:
                         gui_joints[29].value = gui_joints[28].value
                         gui_joints[30].value = gui_joints[28].value
                         axis = to_axisangle(gui_joints[i].value, i)
-                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        R_gui = tf.SO3.exp(axis)
+                        off = VISUAL_OFFSET.get(i, None)
+                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
+                        transform_controls[i].wxyz = R_vis.wxyz
                         out.changed = True
                     elif i == 31:
                         gui_joints[32].value = gui_joints[31].value
                         gui_joints[33].value = gui_joints[31].value
                         axis = to_axisangle(gui_joints[i].value, i)
-                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        R_gui = tf.SO3.exp(axis)
+                        off = VISUAL_OFFSET.get(i, None)
+                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
+                        transform_controls[i].wxyz = R_vis.wxyz
                         out.changed = True
                     elif i == 34:
                         gui_joints[35].value = gui_joints[34].value
                         gui_joints[36].value = gui_joints[34].value
                         axis = to_axisangle(gui_joints[i].value, i)
-                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        R_gui = tf.SO3.exp(axis)
+                        off = VISUAL_OFFSET.get(i, None)
+                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
+                        transform_controls[i].wxyz = R_vis.wxyz
                         out.changed = True
                     elif i == 37:
                         gui_joints[38].value = gui_joints[37].value[1]
                         gui_joints[39].value = gui_joints[37].value[1]
                         axis = to_axisangle(gui_joints[i].value, i)
-                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        R_gui = tf.SO3.exp(axis)
+                        off = VISUAL_OFFSET.get(i, None)
+                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
+                        transform_controls[i].wxyz = R_vis.wxyz
                         out.changed = True
                     elif i == 52:
                         gui_joints[53].value = gui_joints[52].value[1]
                         gui_joints[54].value = gui_joints[52].value[1]
                         axis = to_axisangle(gui_joints[i].value, i)
-                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        R_gui = tf.SO3.exp(axis)
+                        off = VISUAL_OFFSET.get(i, None)
+                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
+                        transform_controls[i].wxyz = R_vis.wxyz
                         out.changed = True
                     elif i == 40:
                       gui_joints[41].value = gui_joints[40].value
                       gui_joints[42].value = gui_joints[40].value
                       axis = to_axisangle(gui_joints[i].value, i)
-                      transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                      # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                      R_gui = tf.SO3.exp(axis)
+                      off = VISUAL_OFFSET.get(i, None)
+                      R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
+                      transform_controls[i].wxyz = R_vis.wxyz
                       out.changed = True
                     elif i == 43:
                         gui_joints[44].value = gui_joints[43].value
                         gui_joints[45].value = gui_joints[43].value
                         axis = to_axisangle(gui_joints[i].value, i)
-                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        R_gui = tf.SO3.exp(axis)
+                        off = VISUAL_OFFSET.get(i, None)
+                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
+                        transform_controls[i].wxyz = R_vis.wxyz
                         out.changed = True
                     elif i == 46:
                         gui_joints[47].value = gui_joints[46].value
                         gui_joints[48].value = gui_joints[46].value
                         axis = to_axisangle(gui_joints[i].value, i)
-                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        R_gui = tf.SO3.exp(axis)
+                        off = VISUAL_OFFSET.get(i, None)
+                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
+                        transform_controls[i].wxyz = R_vis.wxyz
                         out.changed = True
                     elif i == 49:
                         gui_joints[50].value = gui_joints[49].value
                         gui_joints[51].value = gui_joints[49].value
                         axis = to_axisangle(gui_joints[i].value, i)
-                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        R_gui = tf.SO3.exp(axis)
+                        off = VISUAL_OFFSET.get(i, None)
+                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
+                        transform_controls[i].wxyz = R_vis.wxyz
                         out.changed = True
                         
                         
                     else:
                       axis = to_axisangle(gui_joints[i].value,i) 
-                      transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                      # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                      R_gui = tf.SO3.exp(axis)
+                      off = VISUAL_OFFSET.get(i, None)
+                      R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
+                      transform_controls[i].wxyz = R_vis.wxyz
                       out.changed = True
 
                     value = tuple(to_axisangle(gui_joints[i].value,i))
@@ -643,7 +718,15 @@ def make_gui_elements(
         def set_callback_in_closure(i: int) -> None:
             @controls.on_update
             def _(_) -> None:
-                axisangle = tf.SO3(controls.wxyz).log()
+                # axisangle = tf.SO3(controls.wxyz).log()
+                R_vis = tf.SO3(controls.wxyz)
+                off = VISUAL_OFFSET.get(i, None)
+                if off is None:
+                    R_gui = R_vis
+                else:
+                    R_off = tf.SO3.exp(off)
+                    R_gui = R_off.inv() @ R_vis
+                axisangle = R_gui.log()
                 if len(gui_joints[i].value) == 2:
                     gui_joints[i].value = (axisangle[1], axisangle[2])
                 else:
