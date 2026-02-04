@@ -72,7 +72,7 @@ DEFAULT_LIMITS: Dict[str, Tuple[float, float]] = {
 }
 
 
-SIGN: Dict[str, float] = {
+SIGN: Dict[str, float] = { # if the moving direction doesnt match, set the para = 1.0, -1.0 is default
   "RightIndexFinger": -1.0,
   "RightMiddleFinger": 1.0,
   "RightRingFinger": 1.0,
@@ -82,6 +82,10 @@ SIGN: Dict[str, float] = {
   "LeftRingFinger": -1.0,
   "LeftPinkyFinger": -1.0,
   "LeftElbowYaw": 1.0,
+  "RightShoulderYaw": 1.0, 
+  "RightShoulderPitch": 1.0,
+  "LeftElbowPitch": 1.0,
+  "RightElbowPitch": 1.0,
 }
 
 
@@ -97,16 +101,20 @@ def clamp(actuator: str, v: float) -> float:
         return hi
     return v
 
-
+OFFSET = { #used for customize
+        "RightShoulderRoll": deg(45.0), # used for A-pose setup
+        "RightElbowPitch": deg(-127.0), # used for A-pose setup
+        "LeftShoulderRoll": deg(-45.0), # used for A-pose setup
+        "LeftElbowPitch": deg(127.0), # used for A-pose setup
+        # if using Sophia's default pose(motors=0), comment out everything above
+}
 def send_t_pose(pose_pub, limit, repeats=10, dt=0.1):
     """
     set all actuators to 0
     """
     from hr_msgs.msg import TargetPosture
     import rospy
-    OFFSET = { #used for customize
-        "LeftShoulderRoll": 0.30,
-    }
+    
     names = []
     values = []
     for name, (lo, hi) in limit.items():
@@ -279,10 +287,12 @@ class BodyBridgeServer:
                     self._send(conn, code=3, error=f"no limits for actuator {c.actuator}")
                     return
 
-                v = float(c.extractor(value)) * GLOBAL_SCALE
-                v = clamp(c.actuator, v * float(SIGN.get(c.actuator, -1.0))) # used magic number to match the moving direction of fingers
+                delta = float(c.extractor(value)) * GLOBAL_SCALE
+                delta = delta * float(SIGN.get(c.actuator, -1.0)) # used magic number to match the moving direction of fingers
                 # reason for this might be some inconsistency in to_axisangle in smpl_visualizer.py
                 # v = clamp(c.actuator, v)
+                base_bias = float(OFFSET.get(c.actuator, 0.0))
+                v = clamp(c.actuator, base_bias + delta)
                 names.append(c.actuator)
                 vals.append(v)
 

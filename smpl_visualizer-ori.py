@@ -22,8 +22,6 @@ import viser.transforms as tf
 import Sophia_control
 from scipy.spatial.transform import Rotation as R
 
-import math
-
 ####################################################################################################
 # ‼️  UI-RELATED LOGIC OVERVIEW                                                                    #
 # The visualizer has two layers of UI:                                                             #
@@ -56,9 +54,6 @@ def to_axisangle(val: tuple[float, ...] ,index = 0) -> np.ndarray:
             return np.array([float(val), 0.0, -float(val)], dtype=np.float32)
         if index in (49,50,51):
             return np.array([float(val)*0.3, 0.0, -float(val)], dtype=np.float32)
-        if index in (53,54):
-            return np.array([float(val), 0.2 * float(val),   -float(val)], dtype=np.float32)
-            # dk, copied from 38,39. wait to be checked
         return np.array([0.0, float(val), 0.0], dtype=np.float32)
     
     if len(val) == 2:
@@ -83,11 +78,6 @@ def to_axisangle(val: tuple[float, ...] ,index = 0) -> np.ndarray:
           return np.array([x, y, z_linked], dtype=np.float32)
       
       if index == 37:
-          x,y = val
-          z_linked = y
-          return np.array([x, y, z_linked], dtype=np.float32)
-      
-      if index == 52:
           x,y = val
           z_linked = y
           return np.array([x, y, z_linked], dtype=np.float32)
@@ -151,28 +141,9 @@ class SmplHelper:
 
 
 ########################################
-#      APPLICATION ENTRY-POINT (main)  #
+#  ��  APPLICATION ENTRY-POINT (main)  #
 ########################################
 
-
-
-def deg(x):
-    return x * math.pi / 180.0
-
-VISUAL_OFFSET = {
-    # web-pose startup for default motor = 0
-    # 16: to_axisangle((0.0, -1.32), 16), # left shoulder roll
-    # 18: to_axisangle((0.0, -0.96), 18), # left elbow pitch
-    # 17: to_axisangle((0.0, 1.32), 17), # right shoulder roll
-    # 19: to_axisangle((0.0, 0.96), 19), # right elbow pitch
-
-    #-----------
-    
-    # web-pose startup for A-pose
-    16: to_axisangle((0.0, -0.78), 16), # left shoulder roll
-    17: to_axisangle((0.0, 0.78), 17), # right shoulder roll
-
-}
 def main(model_path: Path) -> None:
     # ————————————————————————————————————————
     # 1)  Spin-up TCP/WebSocket server (Viser)
@@ -184,7 +155,6 @@ def main(model_path: Path) -> None:
     # 2)  Initialise SMPL helper & GUI
     #     └─ make_gui_elements(..) **creates all widgets & gizmos**
     model = SmplHelper(model_path)
-
     gui_elements = make_gui_elements(
         server,
         num_betas=model.num_betas,
@@ -205,10 +175,6 @@ def main(model_path: Path) -> None:
     red_sphere = trimesh.creation.icosphere(radius=0.001, subdivisions=1)
     red_sphere.visual.vertex_colors = (255, 0, 0, 255)  # type: ignore
 
-    # print("render loop started")
-
-
-
     while True:
         time.sleep(0.02)  # crude throttling
         if not gui_elements.changed:
@@ -219,51 +185,10 @@ def main(model_path: Path) -> None:
         
 
         # (Re)-evaluate SMPL with current GUI values
-
-        # modify web pose
-        # axes = []
-        # for i, g in enumerate(gui_elements.gui_joints):
-        #     a = to_axisangle(g.value, i)
-        #     a = a + VISUAL_OFFSET.get(i, np.array([0.0, 0.0, 0.0]))
-        #     axes.append(a)
-
-        axes = []
-        wxyz_vis = []
-        for i, g in enumerate(gui_elements.gui_joints):
-            a = to_axisangle(g.value, i)
-            R_gui = tf.SO3.exp(a)
-            off = VISUAL_OFFSET.get(i, None)
-            if off is None:
-                R_vis = R_gui
-            else:
-                R_off = tf.SO3.exp(off)
-                R_vis = R_off @ R_gui
-            axes.append(R_vis.log())
-            wxyz_vis.append(R_vis.wxyz)
-
         smpl_outputs = model.get_outputs(
             betas=np.array([x.value for x in gui_elements.gui_betas]),
-            joint_rotmats= tf.SO3.exp(np.array(axes)).as_matrix(),
+            joint_rotmats= tf.SO3.exp(np.array([to_axisangle(g.value, i) for i,g in enumerate(gui_elements.gui_joints)])).as_matrix(),
         )
-
-        # modified version
-        # smpl_outputs = model.get_outputs(
-        #     betas=np.array([x.value for x in gui_elements.gui_betas]),
-        #     joint_rotmats= tf.SO3.exp(np.array(axes)).as_matrix(),
-        # )
-
-        # print("model has output")
-
-        for i, control in enumerate(gui_elements.transform_controls):
-            control.wxyz = wxyz_vis[i]
-            control.position = smpl_outputs.T_parent_joint[i, :3, 3]
-
-        # smpl_outputs = model.get_outputs(
-        #     betas=np.array([x.value for x in gui_elements.gui_betas]),
-        #     joint_rotmats= tf.SO3.exp(np.array([to_axisangle(g.value, i) for i,g in enumerate(gui_elements.gui_joints)])).as_matrix(),
-        # )
-
-
 
         # Reflect into scene
         body_handle.vertices = smpl_outputs.vertices
@@ -273,16 +198,11 @@ def main(model_path: Path) -> None:
         # Update gizmo positions so they stick to joints
         for i, control in enumerate(gui_elements.transform_controls):
             control.position = smpl_outputs.T_parent_joint[i, :3, 3]
-        # updated gizmo
-        # for i, control in enumerate(gui_elements.transform_controls):
-        #     control.position = smpl_outputs.T_world_joint[i, :3, 3]
 
 
 ##############################################
-#      GUI FACTORY – builds all user widgets  #
+#  ��  GUI FACTORY – builds all user widgets  #
 ##############################################
-
-hidden_indices = {26,27,29,30,32,33,35,36,38,39,41,42,44,45,47,48,50,51,53,54}
 
 def make_gui_elements(
     server: viser.ViserServer,
@@ -347,8 +267,6 @@ def make_gui_elements(
     # ==============================================================================================
     # 3. JOINTS TAB  — per-joint axis-angle controls
     # ==============================================================================================
-
-
     with tab_group.add_tab("Joints", viser.Icon.ANGLE):
       
         gui_reset_joints = server.gui.add_button("Reset Joints")
@@ -367,7 +285,7 @@ def make_gui_elements(
 
         gui_joints: list[viser.GuiInputHandle[tuple[float, float, float]]] = []
         for i in range(num_joints):
-            if i == 16:
+            if i ==16:
                 gui_joint = server.gui.add_vector2(
                     label= f"Left Shoulder Pitch & Left Shoulder Roll",
                      initial_value=(0.0,0.0),
@@ -392,22 +310,18 @@ def make_gui_elements(
                      step=0.05,
                 )
             elif i == 20:
-                gui_joint = server.gui.add_slider(
+                gui_joint = server.gui.add_vector3(
                       label = f"Left Elbow Yaw",
-                      initial_value= 0.0,
+                      initial_value= (0.0,0.0,0.0),
                       step= 0.05,
-                      min = deg(-123),
-                      max = deg(123)
                   )
             elif i == 21:
                 gui_joint = server.gui.add_slider(
                       label = f"Right Elbow Yaw",
                       initial_value= 0.0,
                       step= 0.05,
-                      # min = -1.2,
-                      # max = 1.2
-                      min = deg(-123),
-                      max = deg(123)
+                      min = -1.2,
+                      max = 1.2
                   )
                 
             elif i in (25,28,31,34,40,43,46,49):
@@ -416,138 +330,73 @@ def make_gui_elements(
                       label = f"Left Index Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      # min = -1.2,
-                      # max = 0.1
-                      min = deg(-123),
-                      max = deg(18)
+                      min = -1.2,
+                      max = 0.1
                   )
                 elif i == 28:
                     gui_joint = server.gui.add_slider(
                       label = f"Left Middle Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      # min = -1.2,
-                      # max = 0.1
-                      min = deg(-132),
-                      max = deg(18)
+                      min = -1.2,
+                      max = 0.1
                   )
                 elif i == 31:
                     gui_joint = server.gui.add_slider(
                       label = f"Left Pinkie Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      # min = -1.2,
-                      # max = 0.1
-                      min = deg(-75),
-                      max = deg(4)
+                      min = -1.2,
+                      max = 0.1
                   )
                 elif i == 34:
                     gui_joint = server.gui.add_slider(
                       label = f"Left Ring Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      # min = -1.2,
-                      # max = 0.1
-                      min = deg(-136),
-                      max = deg(18)
+                      min = -1.2,
+                      max = 0.1
                   )
                 elif i == 40: 
                   gui_joint = server.gui.add_slider(
                       label = f"Right Index Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      # min = -1.2,
-                      # max = 0.1
-                      min = deg(-123),
-                      max = deg(18)
+                      min = -1.2,
+                      max = 0.1
                   )
                 elif i == 43:
                     gui_joint = server.gui.add_slider(
                       label = f"Right Middle Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      # min = -1.2,
-                      # max = 0.1
-                      min = deg(-132),
-                      max = deg(18)
+                      min = -1.2,
+                      max = 0.1
                   )
                 elif i == 46:
                     gui_joint = server.gui.add_slider(
                       label = f"Right Pinkie Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      # min = -1.2,
-                      # max = 0.1
-                      min = deg(-75),
-                      max = deg(4)
+                      min = -1.2,
+                      max = 0.1
                   )
                 elif i == 49:
                     gui_joint = server.gui.add_slider(
                       label = f"Right Ring Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      # min = -1.2,
-                      # max = 0.1
-                      min = deg(-136),
-                      max = deg(18)
+                      min = -1.2,
+                      max = 0.1
                   )
                     
             elif i == 37:
-                left_thumb = server.gui.add_vector2(
+                gui_joint = server.gui.add_vector2(
                     label= f"Left Thumb Roll & Left Thumb Finger",
-                     initial_value=(0.0,0.0),
+                     initial_value=(0.8,0.0),
                      step=0.05,
-                     visible = False,
                 )
-                LeftThumb_roll = server.gui.add_slider(
-                    label = "Left Thumb Roll",
-                    initial_value= 0.0,
-                    step = 0.05,
-                    min = deg(-31),
-                    max = deg(22),
-                )
-                LeftThumb_finger = server.gui.add_slider(
-                    label = "Left Thumb Finger",
-                    initial_value= 0.0,
-                    step = 0.05,
-                    min = deg(-44),
-                    max = deg(75),
-                )
-                def _sync_left_thumb(_):
-                    left_thumb.value = (float(LeftThumb_roll.value), float(-1.0 * LeftThumb_finger.value)) # magic number -1.0 used to match the moving direction between robot and web pose
-                    print("read slider number")
-                    out.changed = True
-                LeftThumb_roll.on_update(_sync_left_thumb)
-                LeftThumb_finger.on_update(_sync_left_thumb)
-                gui_joint = left_thumb
-            elif i == 52:
-                right_thumb = server.gui.add_vector2(
-                    label = "Right Thumb Roll & Right Thumb Finger",
-                     initial_value=(0.0,0.0),
-                     step=0.05,
-                     visible = False,
-                )
-                RightThumb_roll = server.gui.add_slider(
-                    label = "Right Thumb Roll",
-                    initial_value= 0.0,
-                    step = 0.05,
-                    min = deg(-31),
-                    max = deg(22),
-                )
-                RightThumb_finger = server.gui.add_slider(
-                    label = "Right Thumb Finger",
-                    initial_value= 0.0,
-                    step = 0.05,
-                    min = deg(-44),
-                    max = deg(75),
-                )
-                def _sync_right_thumb(_):
-                    right_thumb.value = (float(RightThumb_roll.value), float(RightThumb_finger.value))
-                    out.changed = True
-                RightThumb_roll.on_update(_sync_right_thumb)
-                RightThumb_finger.on_update(_sync_right_thumb)
-                gui_joint = right_thumb
-            elif i in (26,27,29,30,32,33,35,36,38,39,41,42,44,45,47,48,50,51,53,54):
+            elif i in (26,27,29,30,32,33,35,36,38,39,41,42,44,45,47,48,50,51):
                 gui_joint = server.gui.add_slider(
                     label = f"Joint {i}(1-DOF)",
                     initial_value= 0.0,
@@ -576,111 +425,61 @@ def make_gui_elements(
                       gui_joints[26].value = gui_joints[25].value
                       gui_joints[27].value = gui_joints[25].value
                       axis = to_axisangle(gui_joints[i].value, i)
-                      # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
-                      R_gui = tf.SO3.exp(axis)
-                      off = VISUAL_OFFSET.get(i, None)
-                      R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
-                      transform_controls[i].wxyz = R_vis.wxyz
+                      transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
                       out.changed = True
                     elif i == 28:
                         gui_joints[29].value = gui_joints[28].value
                         gui_joints[30].value = gui_joints[28].value
                         axis = to_axisangle(gui_joints[i].value, i)
-                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
-                        R_gui = tf.SO3.exp(axis)
-                        off = VISUAL_OFFSET.get(i, None)
-                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
-                        transform_controls[i].wxyz = R_vis.wxyz
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
                         out.changed = True
                     elif i == 31:
                         gui_joints[32].value = gui_joints[31].value
                         gui_joints[33].value = gui_joints[31].value
                         axis = to_axisangle(gui_joints[i].value, i)
-                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
-                        R_gui = tf.SO3.exp(axis)
-                        off = VISUAL_OFFSET.get(i, None)
-                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
-                        transform_controls[i].wxyz = R_vis.wxyz
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
                         out.changed = True
                     elif i == 34:
                         gui_joints[35].value = gui_joints[34].value
                         gui_joints[36].value = gui_joints[34].value
                         axis = to_axisangle(gui_joints[i].value, i)
-                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
-                        R_gui = tf.SO3.exp(axis)
-                        off = VISUAL_OFFSET.get(i, None)
-                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
-                        transform_controls[i].wxyz = R_vis.wxyz
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
                         out.changed = True
                     elif i == 37:
                         gui_joints[38].value = gui_joints[37].value[1]
                         gui_joints[39].value = gui_joints[37].value[1]
                         axis = to_axisangle(gui_joints[i].value, i)
-                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
-                        R_gui = tf.SO3.exp(axis)
-                        off = VISUAL_OFFSET.get(i, None)
-                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
-                        transform_controls[i].wxyz = R_vis.wxyz
-                        out.changed = True
-                    elif i == 52:
-                        gui_joints[53].value = gui_joints[52].value[1]
-                        gui_joints[54].value = gui_joints[52].value[1]
-                        axis = to_axisangle(gui_joints[i].value, i)
-                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
-                        R_gui = tf.SO3.exp(axis)
-                        off = VISUAL_OFFSET.get(i, None)
-                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
-                        transform_controls[i].wxyz = R_vis.wxyz
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
                         out.changed = True
                     elif i == 40:
                       gui_joints[41].value = gui_joints[40].value
                       gui_joints[42].value = gui_joints[40].value
                       axis = to_axisangle(gui_joints[i].value, i)
-                      # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
-                      R_gui = tf.SO3.exp(axis)
-                      off = VISUAL_OFFSET.get(i, None)
-                      R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
-                      transform_controls[i].wxyz = R_vis.wxyz
+                      transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
                       out.changed = True
                     elif i == 43:
                         gui_joints[44].value = gui_joints[43].value
                         gui_joints[45].value = gui_joints[43].value
                         axis = to_axisangle(gui_joints[i].value, i)
-                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
-                        R_gui = tf.SO3.exp(axis)
-                        off = VISUAL_OFFSET.get(i, None)
-                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
-                        transform_controls[i].wxyz = R_vis.wxyz
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
                         out.changed = True
                     elif i == 46:
                         gui_joints[47].value = gui_joints[46].value
                         gui_joints[48].value = gui_joints[46].value
                         axis = to_axisangle(gui_joints[i].value, i)
-                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
-                        R_gui = tf.SO3.exp(axis)
-                        off = VISUAL_OFFSET.get(i, None)
-                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
-                        transform_controls[i].wxyz = R_vis.wxyz
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
                         out.changed = True
                     elif i == 49:
                         gui_joints[50].value = gui_joints[49].value
                         gui_joints[51].value = gui_joints[49].value
                         axis = to_axisangle(gui_joints[i].value, i)
-                        # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
-                        R_gui = tf.SO3.exp(axis)
-                        off = VISUAL_OFFSET.get(i, None)
-                        R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
-                        transform_controls[i].wxyz = R_vis.wxyz
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
                         out.changed = True
                         
                         
                     else:
                       axis = to_axisangle(gui_joints[i].value,i) 
-                      # transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
-                      R_gui = tf.SO3.exp(axis)
-                      off = VISUAL_OFFSET.get(i, None)
-                      R_vis = (tf.SO3.exp(off) @ R_gui) if off is not None else R_gui
-                      transform_controls[i].wxyz = R_vis.wxyz
+                      transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
                       out.changed = True
 
                     value = tuple(to_axisangle(gui_joints[i].value,i))
@@ -691,8 +490,7 @@ def make_gui_elements(
                         value = tuple(float(x) for x in value)
 
                     print(value)
-                    if i not in hidden_indices:
-                        Sophia_control.call_remote(index = i,value = value)
+                    Sophia_control.call_remote(index = i,value = value)
                     
 
             set_callback_in_closure(i)
@@ -725,15 +523,7 @@ def make_gui_elements(
         def set_callback_in_closure(i: int) -> None:
             @controls.on_update
             def _(_) -> None:
-                # axisangle = tf.SO3(controls.wxyz).log()
-                R_vis = tf.SO3(controls.wxyz)
-                off = VISUAL_OFFSET.get(i, None)
-                if off is None:
-                    R_gui = R_vis
-                else:
-                    R_off = tf.SO3.exp(off)
-                    R_gui = R_off.inv() @ R_vis
-                axisangle = R_gui.log()
+                axisangle = tf.SO3(controls.wxyz).log()
                 if len(gui_joints[i].value) == 2:
                     gui_joints[i].value = (axisangle[1], axisangle[2])
                 else:
@@ -777,4 +567,3 @@ def getindexandvalue(i, value):
 # ——————————————————————————————————————————————————————————————————————————
 if __name__ == "__main__":
     tyro.cli(main, description=__doc__)
-
