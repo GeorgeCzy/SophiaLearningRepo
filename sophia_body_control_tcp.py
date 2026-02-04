@@ -22,7 +22,7 @@ import math
 # Safety configuration
 # ----------------------------
 
-GLOBAL_SCALE = 0.5   # extra safety: shrink all motions
+GLOBAL_SCALE = 1.0   # extra safety: shrink all motions
 
 def deg(x):
     return x * math.pi / 180.0
@@ -69,6 +69,18 @@ DEFAULT_LIMITS: Dict[str, Tuple[float, float]] = {
     "LeftMiddleFinger": (deg(-18),  deg(132)),
     "LeftRingFinger":   (deg(-18),  deg(136)),
     "LeftPinkyFinger":  (deg(-4),   deg(75)),
+}
+
+
+SIGN: Dict[str, float] = {
+  "RightIndexFinger": -1.0,
+  "RightMiddleFinger": 1.0,
+  "RightRingFinger": 1.0,
+  "RightPinkyFinger": -1.0,
+  "LeftIndexFinger": -1.0,
+  "LeftMidlleFinger": -1.0,
+  "LeftRingFinger": -1.0,
+  "LeftPinkyFinger": -1.0,
 }
 
 
@@ -261,7 +273,9 @@ class BodyBridgeServer:
                     return
 
                 v = float(c.extractor(value)) * GLOBAL_SCALE
-                v = clamp(c.actuator, v)
+                v = clamp(c.actuator, v * float(SIGN.get(c.actuator, -1.0))) # used magic number to match the moving direction of fingers
+                # reason for this might be some inconsistency in to_axisangle in smpl_visualizer.py
+                # v = clamp(c.actuator, v)
                 names.append(c.actuator)
                 vals.append(v)
 

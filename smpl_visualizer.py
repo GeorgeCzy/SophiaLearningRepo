@@ -22,6 +22,8 @@ import viser.transforms as tf
 import Sophia_control
 from scipy.spatial.transform import Rotation as R
 
+import math
+
 ####################################################################################################
 # ‼️  UI-RELATED LOGIC OVERVIEW                                                                    #
 # The visualizer has two layers of UI:                                                             #
@@ -178,6 +180,14 @@ def main(model_path: Path) -> None:
 
     # print("render loop started")
 
+    VISUAL_OFFSET = {
+        # 16: to_axisangle((0.0, -1.3), 16), # left shoulder roll
+        # 18: to_axisangle((0.5, -0.75), 18), # left elbow pitch
+        # 17: to_axisangle((0.0, 1.3), 17), # right shoulder roll
+        # 19: to_axisangle((-0.5, 0.75), 19), # right elbow pitch
+
+    }
+
     while True:
         time.sleep(0.02)  # crude throttling
         if not gui_elements.changed:
@@ -188,10 +198,24 @@ def main(model_path: Path) -> None:
         
 
         # (Re)-evaluate SMPL with current GUI values
+
+        # modify web pose
+        # axes = []
+        # for i, g in enumerate(gui_elements.gui_joints):
+        #     a = to_axisangle(g.value, i)
+        #     a = a + VISUAL_OFFSET.get(i, np.array([0.0, 0.0, 0.0]))
+        #     axes.append(a)
+
+
         smpl_outputs = model.get_outputs(
             betas=np.array([x.value for x in gui_elements.gui_betas]),
             joint_rotmats= tf.SO3.exp(np.array([to_axisangle(g.value, i) for i,g in enumerate(gui_elements.gui_joints)])).as_matrix(),
         )
+        # modified version
+        # smpl_outputs = model.get_outputs(
+        #     betas=np.array([x.value for x in gui_elements.gui_betas]),
+        #     joint_rotmats= tf.SO3.exp(np.array(axes)).as_matrix(),
+        # )
 
         # print("model has output")
 
@@ -203,6 +227,9 @@ def main(model_path: Path) -> None:
         # Update gizmo positions so they stick to joints
         for i, control in enumerate(gui_elements.transform_controls):
             control.position = smpl_outputs.T_parent_joint[i, :3, 3]
+        # updated gizmo
+        # for i, control in enumerate(gui_elements.transform_controls):
+        #     control.position = smpl_outputs.T_world_joint[i, :3, 3]
 
 
 ##############################################
@@ -274,6 +301,10 @@ def make_gui_elements(
     # ==============================================================================================
     # 3. JOINTS TAB  — per-joint axis-angle controls
     # ==============================================================================================
+
+    def deg(x):
+        return x * math.pi / 180.0
+
     with tab_group.add_tab("Joints", viser.Icon.ANGLE):
       
         gui_reset_joints = server.gui.add_button("Reset Joints")
@@ -327,8 +358,10 @@ def make_gui_elements(
                       label = f"Right Elbow Yaw",
                       initial_value= 0.0,
                       step= 0.05,
-                      min = -1.2,
-                      max = 1.2
+                      # min = -1.2,
+                      # max = 1.2
+                      min = deg(-123),
+                      max = deg(123)
                   )
                 
             elif i in (25,28,31,34,40,43,46,49):
@@ -337,64 +370,80 @@ def make_gui_elements(
                       label = f"Left Index Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      min = -1.2,
-                      max = 0.1
+                      # min = -1.2,
+                      # max = 0.1
+                      min = deg(-123),
+                      max = deg(18)
                   )
                 elif i == 28:
                     gui_joint = server.gui.add_slider(
                       label = f"Left Middle Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      min = -1.2,
-                      max = 0.1
+                      # min = -1.2,
+                      # max = 0.1
+                      min = deg(-132),
+                      max = deg(18)
                   )
                 elif i == 31:
                     gui_joint = server.gui.add_slider(
                       label = f"Left Pinkie Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      min = -1.2,
-                      max = 0.1
+                      # min = -1.2,
+                      # max = 0.1
+                      min = deg(-75),
+                      max = deg(4)
                   )
                 elif i == 34:
                     gui_joint = server.gui.add_slider(
                       label = f"Left Ring Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      min = -1.2,
-                      max = 0.1
+                      # min = -1.2,
+                      # max = 0.1
+                      min = deg(-136),
+                      max = deg(18)
                   )
                 elif i == 40: 
                   gui_joint = server.gui.add_slider(
                       label = f"Right Index Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      min = -1.2,
-                      max = 0.1
+                      # min = -1.2,
+                      # max = 0.1
+                      min = deg(-123),
+                      max = deg(18)
                   )
                 elif i == 43:
                     gui_joint = server.gui.add_slider(
                       label = f"Right Middle Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      min = -1.2,
-                      max = 0.1
+                      # min = -1.2,
+                      # max = 0.1
+                      min = deg(-132),
+                      max = deg(18)
                   )
                 elif i == 46:
                     gui_joint = server.gui.add_slider(
                       label = f"Right Pinkie Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      min = -1.2,
-                      max = 0.1
+                      # min = -1.2,
+                      # max = 0.1
+                      min = deg(-75),
+                      max = deg(4)
                   )
                 elif i == 49:
                     gui_joint = server.gui.add_slider(
                       label = f"Right Ring Finger",
                       initial_value= 0.0,
                       step= 0.05,
-                      min = -1.2,
-                      max = 0.1
+                      # min = -1.2,
+                      # max = 0.1
+                      min = deg(-136),
+                      max = deg(18)
                   )
                     
             elif i == 37:
