@@ -12,3 +12,5 @@ Already have smpl_visualizer on local computer, added tcp code for running on So
 Run the tcp bridge code first and check connectivity: ss -lntp | grep 5005.
 Then run visualizer.
 To end the session, quit tcp bridge code and run "lsof -i :5005" to find the PID of the process, then do "kill -9 PID" to kill the port.
+
+The smpl_visualizer.py is not well-structed, it used some virtual(helper) indices that inside the range of 0-num_joints. However, it's a program only for body control, so it can run with problem.
