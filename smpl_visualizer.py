@@ -164,8 +164,8 @@ VISUAL_OFFSET = {
     18: to_axisangle((0.1, -0.75), 18), # left elbow pitch
     17: to_axisangle((-0.05, 1.25), 17), # right shoulder roll
     19: to_axisangle((0.1, 0.75), 19), # right elbow pitch
-    20: to_axisangle((-0.5), 20), # left elbow yaw
-    21: to_axisangle((-0.5), 21), # right elbow yaw
+    20: to_axisangle((-0.3), 20), # left elbow yaw
+    21: to_axisangle((-0.3), 21), # right elbow yaw
     # 16: to_axisangle((deg(-90), 0.0), 16), # left shoulder roll
     # 17: to_axisangle((deg(90), 0.0), 17), # right shoulder roll
     # 18: to_axisangle((0.0, deg(45)), 18), # left elbow pitch
