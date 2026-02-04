@@ -56,6 +56,9 @@ def to_axisangle(val: tuple[float, ...] ,index = 0) -> np.ndarray:
             return np.array([float(val), 0.0, -float(val)], dtype=np.float32)
         if index in (49,50,51):
             return np.array([float(val)*0.3, 0.0, -float(val)], dtype=np.float32)
+        if index in (53,54):
+            return np.array([float(val), 0.2 * float(val),   -float(val)], dtype=np.float32)
+            # dk, copied from 38,39. wait to be checked
         return np.array([0.0, float(val), 0.0], dtype=np.float32)
     
     if len(val) == 2:
@@ -80,6 +83,11 @@ def to_axisangle(val: tuple[float, ...] ,index = 0) -> np.ndarray:
           return np.array([x, y, z_linked], dtype=np.float32)
       
       if index == 37:
+          x,y = val
+          z_linked = y
+          return np.array([x, y, z_linked], dtype=np.float32)
+      
+      if index == 52:
           x,y = val
           z_linked = y
           return np.array([x, y, z_linked], dtype=np.float32)
@@ -236,7 +244,7 @@ def main(model_path: Path) -> None:
 #      GUI FACTORY – builds all user widgets  #
 ##############################################
 
-hidden_indices = {26,27,29,30,32,33,35,36,38,39,41,42,44,45,47,48,50,51}
+hidden_indices = {26,27,29,30,32,33,35,36,38,39,41,42,44,45,47,48,50,51,53,54}
 
 def make_gui_elements(
     server: viser.ViserServer,
@@ -447,12 +455,61 @@ def make_gui_elements(
                   )
                     
             elif i == 37:
-                gui_joint = server.gui.add_vector2(
+                left_thumb = server.gui.add_vector2(
                     label= f"Left Thumb Roll & Left Thumb Finger",
-                     initial_value=(0.8,0.0),
+                     initial_value=(0.0,0.0),
                      step=0.05,
+                     visible = False,
                 )
-            elif i in (26,27,29,30,32,33,35,36,38,39,41,42,44,45,47,48,50,51):
+                LeftThumb_roll = server.gui.add_slider(
+                    label = "Left Thumb Roll",
+                    initial_value= 0.0,
+                    step = 0.05,
+                    min = deg(-31),
+                    max = deg(22),
+                )
+                LeftThumb_finger = server.gui.add_slider(
+                    label = "Left Thumb Finger",
+                    initial_value= 0.0,
+                    step = 0.05,
+                    min = deg(-44),
+                    max = deg(75),
+                )
+                def _sync_left_thumb(_):
+                    left_thumb.value = (float(LeftThumb_roll.value), float(-1.0 * LeftThumb_finger.value)) # magic number -1.0 used to match the moving direction between robot and web pose
+                    print("read slider number")
+                    out.changed = True
+                LeftThumb_roll.on_update(_sync_left_thumb)
+                LeftThumb_finger.on_update(_sync_left_thumb)
+                gui_joint = left_thumb
+            elif i == 52:
+                right_thumb = server.gui.add_vector2(
+                    label = "Right Thumb Roll & Right Thumb Finger",
+                     initial_value=(0.0,0.0),
+                     step=0.05,
+                     visible = False,
+                )
+                RightThumb_roll = server.gui.add_slider(
+                    label = "Right Thumb Roll",
+                    initial_value= 0.0,
+                    step = 0.05,
+                    min = deg(-31),
+                    max = deg(22),
+                )
+                RightThumb_finger = server.gui.add_slider(
+                    label = "Right Thumb Finger",
+                    initial_value= 0.0,
+                    step = 0.05,
+                    min = deg(-44),
+                    max = deg(75),
+                )
+                def _sync_right_thumb(_):
+                    right_thumb.value = (float(RightThumb_roll.value), float(RightThumb_finger.value))
+                    out.changed = True
+                RightThumb_roll.on_update(_sync_right_thumb)
+                RightThumb_finger.on_update(_sync_right_thumb)
+                gui_joint = right_thumb
+            elif i in (26,27,29,30,32,33,35,36,38,39,41,42,44,45,47,48,50,51,53,54):
                 gui_joint = server.gui.add_slider(
                     label = f"Joint {i}(1-DOF)",
                     initial_value= 0.0,
@@ -504,6 +561,12 @@ def make_gui_elements(
                     elif i == 37:
                         gui_joints[38].value = gui_joints[37].value[1]
                         gui_joints[39].value = gui_joints[37].value[1]
+                        axis = to_axisangle(gui_joints[i].value, i)
+                        transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
+                        out.changed = True
+                    elif i == 52:
+                        gui_joints[53].value = gui_joints[52].value[1]
+                        gui_joints[54].value = gui_joints[52].value[1]
                         axis = to_axisangle(gui_joints[i].value, i)
                         transform_controls[i].wxyz = tf.SO3.exp(axis).wxyz
                         out.changed = True
