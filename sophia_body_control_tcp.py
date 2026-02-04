@@ -191,6 +191,12 @@ INDEX_MAP: Dict[int, List[ActuatorCmd]] = {
         ActuatorCmd("LeftThumbFinger", lambda v: _need_vec3(v)[2]),
     ],
 
+    # Right thumb roll & thumb finer
+    52: [
+        ActuatorCmd("RightThumbRoll",   lambda v: _need_vec3(v)[0]),
+        ActuatorCmd("RightThumbFinger", lambda v: _need_vec3(v)[2]),
+    ],
+
     # Right hand fingers
     40: [ActuatorCmd("RightIndexFinger",  lambda v: _need_vec3(v)[2])],
     43: [ActuatorCmd("RightMiddleFinger", lambda v: _need_vec3(v)[2])],
