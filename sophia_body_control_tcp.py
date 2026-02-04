@@ -81,6 +81,7 @@ SIGN: Dict[str, float] = {
   "LeftMidlleFinger": -1.0,
   "LeftRingFinger": -1.0,
   "LeftPinkyFinger": -1.0,
+  "LeftElbowYaw": 1.0,
 }
 
 
