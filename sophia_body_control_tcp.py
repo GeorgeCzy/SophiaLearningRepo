@@ -108,6 +108,17 @@ OFFSET = { #used for customize
         "LeftElbowPitch": deg(127.0), # used for A-pose setup
         # if using Sophia's default pose(motors=0), comment out everything above
 }
+
+GAIN = { # used for matching the amount of displacement between web-end pose and real robot
+    "RightShoulderPitch": 0.95,
+    "LeftShoulderPitch": 0.95,
+    "RightElbowPitch": 1.75,
+    "LeftElbowPitch": 1.75,
+    "LeftShoulderYaw": 3.0,
+    "RightShoulderRoll": 1.5,
+    "LeftShoulderRoll": 1.5,
+}
+
 def send_t_pose(pose_pub, limit, repeats=10, dt=0.1):
     """
     set all actuators to 0
@@ -290,6 +301,7 @@ class BodyBridgeServer:
                 delta = float(c.extractor(value)) * GLOBAL_SCALE
                 delta = delta * float(SIGN.get(c.actuator, -1.0)) # used magic number to match the moving direction of fingers
                 # reason for this might be some inconsistency in to_axisangle in smpl_visualizer.py
+                delta *= float(GAIN.get(c.actuator, 1.0)) # magnify rotation for certain motors
                 # v = clamp(c.actuator, v)
                 base_bias = float(OFFSET.get(c.actuator, 0.0))
                 v = clamp(c.actuator, base_bias + delta)
