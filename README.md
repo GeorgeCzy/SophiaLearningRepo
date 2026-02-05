@@ -28,3 +28,8 @@ why starting with default Sophia pose is not a good choice?
 我感觉这个match的程度和我们选定的初始姿态有很大关系。我认为因为SMPLX建模的问题（SMPLX很贴近人体，Sophia则和人不那么像），他做不到像Sophia这样严格的按角度旋转，他有一些奇怪的牵制（像人一样，当我们把手往后伸，不可能保持与躯干垂直了）。所以就算我们的初始姿态match，当旋转角度大过一定程度一定会match不上。我感觉如果使用A-pose当做初始姿态，机器人和网页端能match的范围会大一些。
 
 或者说，Sophia的旋转是标准的，SMPLX的旋转在一定范围内是标准的。
+
+# Download test data(smplx) from huggingface
+1. export HF_ENDPOINT=https://hf-mirror.com
+2. pip install -U huggingface_hub
+3. run download_helper.py
