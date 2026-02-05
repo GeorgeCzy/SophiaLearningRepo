@@ -20,6 +20,8 @@ The startup pose of the robot and the web-end pose looks similar, but when perfo
 
 LeftShoulderYaw, robot moving speed significantly slower than web-end
 
+SMPLX Left/Right Shoulder Yaw is movinf elbow joint in the direction that vertical to the bone, which is somewhat impossible, Sophia's according movement is rotating its arm by the joint located on the upper arm.
+
 # Tips
 why starting with default Sophia pose is not a good choice?
 
