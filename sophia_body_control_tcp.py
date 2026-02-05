@@ -114,7 +114,7 @@ GAIN = { # used for matching the amount of displacement between web-end pose and
     "LeftShoulderPitch": 0.95,
     "RightElbowPitch": 1.75,
     "LeftElbowPitch": 1.75,
-    "LeftShoulderYaw": 3.0,
+    "LeftShoulderYaw": 10.0,
     "RightShoulderRoll": 1.5,
     "LeftShoulderRoll": 1.5,
 }
